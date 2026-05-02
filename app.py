@@ -303,6 +303,8 @@ st.markdown("""
                  color: #d4af37; font-size: 0.85rem; }
     .quote { font-style: italic; color: #d4cab4; padding-left: 16px;
              border-left: 2px solid #d4af37; margin: 12px 0; }
+     .stCaption, [data-testid="stCaptionContainer"] {
+        color: #d4cab4 !important;
 </style>
 """, unsafe_allow_html=True)
 
