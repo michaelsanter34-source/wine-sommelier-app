@@ -18,10 +18,16 @@ st.set_page_config(page_title='Wine Sommelier', page_icon='🍷', layout='wide',
 HF_REPO_ID = 'Msanter/wine-sommelier-artifacts'  # <-- EDIT THIS
 
 LARGE_FILES = [
-    'wine_clean.parquet',
+     'wine_clean.parquet',
     'embeddings.npy',
     'faiss_index.bin',
     'retrieval_meta.joblib',
+    'vibe_vectors.npy',
+    'food_vectors.npy',
+    'vibe_scores.npy',
+    'food_scores.npy',
+    'sommelier_meta.joblib',
+    'models.joblib',
 ]
 
 def ensure_artifacts():
