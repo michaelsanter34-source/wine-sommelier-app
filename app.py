@@ -15,7 +15,7 @@ st.set_page_config(page_title='Wine Sommelier', page_icon='🍷', layout='wide',
 # Big artifacts (>25 MB) are hosted on HF Hub instead of GitHub. On first run
 # the app downloads them into the working directory. After that they're
 # cached locally and load instantly.
-HF_REPO_ID = 'YMsanter/wine-sommelier-artifacts'  # <-- EDIT THIS
+HF_REPO_ID = 'Msanter/wine-sommelier-artifacts'  # <-- EDIT THIS
 
 LARGE_FILES = [
     'wine_clean.parquet',
