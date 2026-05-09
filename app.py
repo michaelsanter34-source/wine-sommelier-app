@@ -15,10 +15,10 @@ st.set_page_config(page_title='Wine Sommelier', page_icon='🍷', layout='wide',
 # Big artifacts (>25 MB) are hosted on HF Hub instead of GitHub. On first run
 # the app downloads them into the working directory. After that they're
 # cached locally and load instantly.
-HF_REPO_ID = 'Msanter/wine-sommelier-artifacts'  # <-- EDIT THIS
+HF_REPO_ID = 'Msanter/wine-sommelier-artifacts'
 
 LARGE_FILES = [
-     'wine_clean.parquet',
+    'wine_clean.parquet',
     'embeddings.npy',
     'faiss_index.bin',
     'retrieval_meta.joblib',
@@ -36,8 +36,6 @@ def ensure_artifacts():
         if not os.path.exists(fname):
             local = hf_hub_download(repo_id=HF_REPO_ID, filename=fname,
                                     repo_type='dataset', local_dir='.')
-            # hf_hub_download returns a symlink in newer versions; ensure
-            # the file is at the expected path
             if local != os.path.abspath(fname) and not os.path.exists(fname):
                 import shutil
                 shutil.copy(local, fname)
@@ -68,11 +66,9 @@ def load_all_artifacts():
         'flavor_keys': sommelier_meta['FLAVOR_KEYS'],
         'food_keywords': sommelier_meta['FOOD_KEYWORDS'],
         'vibe_keywords': sommelier_meta['VIBE_KEYWORDS'],
-        'xgb_price_median': artifacts['xgb_price_median'],
-        'xgb_price_lower': artifacts['xgb_price_lower'],
-        'xgb_price_upper': artifacts['xgb_price_upper'],
-        'xgb_points': artifacts['xgb_points'],
         'encoders': artifacts['encoders'],
+        'variety_medians': artifacts['variety_medians'],
+        'global_price_median': artifacts['global_price_median'],
         'all_features': artifacts['feature_names'],
         'points_features': artifacts['points_features'],
         'numeric_features': artifacts['numeric_features'],
@@ -167,25 +163,18 @@ def hybrid_search(query, q_emb, max_price=None, min_price=None, min_points=None,
                 candidates = candidates[candidates[col] == 1]
     return candidates.sort_values('combined_score', ascending=False).head(top_k).reset_index(drop=True)
 
-def build_features_for_inference(wine_rows):
-    out = wine_rows.copy()
-    for col, (enc, gmean) in A['encoders'].items():
-        out[f'{col}_te'] = out[col].map(enc).fillna(gmean)
-    for col in A['numeric_features']:
-        if col not in out.columns: out[col] = 0
-        out[col] = out[col].fillna(0)
-    for col in A['flavor_features']:
-        if col not in out.columns: out[col] = 0
-    X_full = out[A['all_features']].values
-    points_idx = [A['all_features'].index(f) for f in A['points_features']]
-    return X_full, X_full[:, points_idx]
+# build_features_for_inference removed (no longer needed without ML price/rating)
 
-def value_label(actual, predicted, lower, upper):
-    if actual < lower:
-        return 'GREAT VALUE', f'predicted ${predicted:.0f} vs. actual ${actual:.0f} ({predicted/actual:.1f}× value)'
-    if actual > upper:
-        return 'OVERPRICED', f'predicted ${predicted:.0f} vs. actual ${actual:.0f} ({actual/predicted:.1f}× over)'
-    return 'FAIR PRICED', f'predicted ${predicted:.0f}, within expected range'
+def value_label(row):
+    actual = row['price']
+    variety = row['variety']
+    median = A['variety_medians'].get(variety, A['global_price_median'])
+    ratio = actual / median
+    if ratio < 0.75:
+        return 'GREAT VALUE', f'${actual:.0f} vs typical {variety} at ${median:.0f}'
+    if ratio > 1.4:
+        return 'PREMIUM', f'${actual:.0f} vs typical {variety} at ${median:.0f}'
+    return 'FAIR PRICED', f'${actual:.0f} is typical for {variety}'
 
 def batch_relevant_sentences(descriptions, q_emb):
     sentence_lists = [split_sentences(d) for d in descriptions]
@@ -239,13 +228,6 @@ def recommend(query=None, *, max_price=None, min_price=None, min_points=None,
     df = A['df']
     title_to_idx = {df.iloc[i]['title']: i for i in range(len(df))}
     orig_indices = [title_to_idx[t] for t in candidates['title']]
-    X_full, X_pts = build_features_for_inference(candidates)
-    log_pred = A['xgb_price_median'].predict(X_full)
-    log_lo = A['xgb_price_lower'].predict(X_full)
-    log_hi = A['xgb_price_upper'].predict(X_full)
-    pts_pred = A['xgb_points'].predict(X_pts)
-    log_lo = np.minimum(log_lo, log_pred); log_hi = np.maximum(log_hi, log_pred)
-    pred_price = 10 ** log_pred; pred_low = 10 ** log_lo; pred_high = 10 ** log_hi
     snippets = batch_relevant_sentences(candidates['description'].tolist(), q_emb)
     recs = []
     vibe_names = A['vibe_names']; food_names = A['food_names']
@@ -263,16 +245,12 @@ def recommend(query=None, *, max_price=None, min_price=None, min_points=None,
         else:
             food_info = {'matched_user_food': None, 'match_percentile': None,
                          'top_default_pairings': [food_names[j] for j in np.argsort(wine_food_scores)[::-1][:2]]}
-        val_lab, val_explain = value_label(row['price'], pred_price[i], pred_low[i], pred_high[i])
+        val_lab, val_explain = value_label(row)
         recs.append({
             'rank': i + 1, 'title': row['title'], 'variety': row['variety'],
             'country': row['country'], 'province': row.get('province', ''), 'winery': row['winery'],
             'vintage': int(row['vintage']) if pd.notna(row.get('vintage')) else None,
             'actual_price': float(row['price']), 'actual_rating': int(row['points']),
-            'predicted_price': round(float(pred_price[i]), 2),
-            'predicted_price_low': round(float(pred_low[i]), 2),
-            'predicted_price_high': round(float(pred_high[i]), 2),
-            'predicted_rating': round(float(pts_pred[i]), 1),
             'value_label': val_lab, 'value_explanation': val_explain,
             'top_vibes': top_vibes, 'food_pairing': food_info,
             'grounded_explanation': snippets[i], 'full_description': row['description'],
@@ -303,8 +281,9 @@ st.markdown("""
                  color: #d4af37; font-size: 0.85rem; }
     .quote { font-style: italic; color: #d4cab4; padding-left: 16px;
              border-left: 2px solid #d4af37; margin: 12px 0; }
-     .stCaption, [data-testid="stCaptionContainer"] {
+    .stCaption, [data-testid="stCaptionContainer"] {
         color: #d4cab4 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -374,7 +353,7 @@ if search_clicked:
             st.markdown(f"## Top {len(result['recommendations'])} Recommendations")
             for rec in result['recommendations']:
                 badge_class = {'GREAT VALUE': 'badge-value', 'FAIR PRICED': 'badge-fair',
-                               'OVERPRICED': 'badge-overpriced'}[rec['value_label']]
+                               'PREMIUM': 'badge-overpriced'}[rec['value_label']]
                 vibes_html = ' '.join(f'<span class="vibe-pill">{v}</span>' for v in rec['top_vibes'])
                 fp = rec['food_pairing']
                 if fp['matched_user_food']:
@@ -392,11 +371,6 @@ if search_clicked:
                     <div class="price-row">
                         <strong>${rec['actual_price']:.0f}</strong> &nbsp;•&nbsp; {rec['actual_rating']} pts &nbsp;
                         <span class="badge {badge_class}">{rec['value_label']}</span>
-                    </div>
-                    <div style="font-size: 0.9rem; color: #b8a99a; margin-bottom: 12px;">
-                        ML predicted: ${rec['predicted_price']:.0f}
-                        (90% interval: ${rec['predicted_price_low']:.0f}–${rec['predicted_price_high']:.0f})
-                        &nbsp;•&nbsp; predicted rating: {rec['predicted_rating']:.1f} pts
                     </div>
                     <div style="margin-bottom: 8px;"><strong>Character:</strong> {vibes_html}</div>
                     <div style="margin-bottom: 8px;">{food_line}</div>
